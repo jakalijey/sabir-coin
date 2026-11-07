@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SABIR | The coin that pays you to wait</title>
+<meta name="description" content="SABIR is a NEAR memecoin with one mechanic: the impatient pay the patient. Wait five minutes or pay to skip. Leave early and your tax stays with those who stayed.">
+<style>
+:root{--ink:#1A0D2E;--ink2:#25173B;--paper:#F5EFE1;--line:rgba(232,224,208,.16);--dim:rgba(245,239,225,.62);--amber:#D97706;--amber2:#F0A63C}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--ink);color:var(--paper);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+h1,h2,h3{font-family:Georgia,"Times New Roman",serif;font-weight:400;margin:0;letter-spacing:-.01em}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+.num{font-variant-numeric:tabular-nums}
+.dim{color:var(--dim)}
+
+/* the stage: a full-width split, the door takes the larger side */
+.stage{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(360px,1fr);min-height:100vh}
+.door-side{position:relative;overflow:hidden;background:radial-gradient(90% 70% at 50% 30%,#31204d 0%,#1A0D2E 70%);min-height:560px}
+#sand{position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none}
+.frame{position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:min(62%,430px);height:82%;background:#0c0617;border:14px solid #3a2a55;border-bottom:0;border-radius:220px 220px 0 0;perspective:1100px;overflow:hidden;box-shadow:inset 0 0 90px rgba(217,119,6,.28)}
+.light{position:absolute;inset:0;background:radial-gradient(60% 60% at 50% 70%,rgba(240,166,60,var(--glow,.05)),transparent 75%)}
+.leaf{position:absolute;inset:0;transform-origin:left center;transform:rotateY(calc(var(--open,0)*-104deg));background:linear-gradient(90deg,#4b3768,#3a2a55 60%,#2d2044);transition:transform 1.2s cubic-bezier(.2,.8,.2,1);border-radius:206px 206px 0 0}
+.leaf::before,.leaf::after{content:"";position:absolute;left:14%;right:14%;border:2px solid rgba(232,224,208,.12)}
+.leaf::before{top:14%;height:30%;border-radius:120px 120px 6px 6px}
+.leaf::after{top:50%;bottom:8%;border-radius:6px}
+.knob{position:absolute;right:9%;top:52%;width:15px;height:15px;border-radius:50%;background:var(--amber);box-shadow:0 0 14px rgba(217,119,6,.8)}
+.door-word{position:absolute;left:24px;top:22px;z-index:4;font:400 20px Georgia,serif;letter-spacing:.14em}
+.door-word small{display:block;font:12px system-ui;letter-spacing:.02em;color:var(--dim)}
+.mode{position:absolute;right:20px;top:24px;z-index:4;font-size:12px;padding:5px 11px;border:1px solid var(--line);border-radius:99px;color:var(--dim)}
+
+.panel{padding:clamp(24px,4vw,56px);display:flex;flex-direction:column;justify-content:center;gap:22px;background:var(--ink)}
+.panel h1{font-size:clamp(38px,5vw,66px);line-height:1.04}
+.lead{font-size:18px;color:var(--dim);margin:0;max-width:34em}
+.toll{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.toll b{font:400 clamp(52px,7vw,92px)/1 Georgia,serif;color:var(--amber2)}
+.toll span{color:var(--dim)}
+.bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--amber);border-radius:99px;transition:width .4s linear}
+.actions{display:flex;gap:12px;flex-wrap:wrap}
+.btn{padding:14px 22px;border-radius:12px;font-weight:600;transition:transform .12s ease,background .2s}
+.btn:active{transform:scale(.96)}
+.btn.main{background:var(--amber);color:#1A0D2E}
+.btn.main:hover{background:var(--amber2)}
+.btn.ghost{border:1px solid var(--line)}
+.btn.ghost:hover{background:var(--ink2)}
+.btn[disabled]{opacity:.4;cursor:not-allowed}
+a.btn{color:var(--paper);text-decoration:none;display:inline-block}
+.nws-modal-wrapper{z-index:1000!important}
+.nws-modal-wrapper .nws-modal-overlay{background:rgba(10,4,20,.82)!important}
+.nws-modal-wrapper .nws-modal{background:#25173B!important;color:var(--paper)!important;border:1px solid var(--line)}
+.nws-modal-wrapper .nws-modal *{color:inherit}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.stats div{background:var(--ink);padding:12px 14px;min-width:0}
+.stats b{display:block;font:400 22px Georgia,serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stats span{font-size:12px;color:var(--dim)}
+.hint{font-size:14px;color:var(--dim);min-height:1.5em;margin:0}
+
+section{padding:clamp(44px,6vw,84px) clamp(20px,5vw,72px);border-top:1px solid var(--line)}
+section>h2{font-size:clamp(28px,3.4vw,44px);margin-bottom:8px}
+.sub{color:var(--dim);margin:0 0 30px;max-width:48em}
+
+.walls{display:grid;grid-template-columns:1fr 1fr;gap:clamp(20px,4vw,56px)}
+.walls h3{font-size:24px;margin-bottom:12px}
+.wall{list-style:none;margin:0;padding:0;min-height:230px}
+.wall li{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line);font-size:15px;animation:drop .5s cubic-bezier(.2,1.5,.4,1)}
+.wall li b{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wall li span{color:var(--dim);white-space:nowrap}
+.wall .paid{color:var(--amber2)}
+@keyframes drop{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
+
+.rules{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(18px,3vw,40px)}
+.rules h3{font-size:24px;margin-bottom:8px}
+.rules p{margin:0;color:var(--dim)}
+.rules .n{font:400 44px Georgia,serif;color:var(--amber)}
+
+.sim-grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);gap:clamp(20px,3vw,48px);align-items:start}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.tab{padding:7px 13px;border:1px solid var(--line);border-radius:99px;font-size:14px;color:var(--dim)}
+.tab.on{background:var(--amber);border-color:var(--amber);color:#1A0D2E;font-weight:600}
+#chart{width:100%;height:auto;display:block}
+.facts{width:100%;border-collapse:collapse;font-size:15px}
+.facts td{padding:9px 0;border-bottom:1px solid var(--line)}
+.facts td:last-child{text-align:right}
+.limits{columns:2;column-gap:48px;color:var(--dim);margin:0;padding-left:18px}
+.limits li{margin-bottom:10px;break-inside:avoid}
+.log{font-size:14px;list-style:none;padding:0;margin:0;max-height:300px;overflow:auto}
+.log li{padding:6px 0;border-bottom:1px solid var(--line);color:var(--dim)}
+footer{padding:28px clamp(20px,5vw,72px);border-top:1px solid var(--line);font-size:14px;color:var(--dim)}
+
+@media (max-width:860px){
+  .stage{grid-template-columns:1fr;min-height:0}
+  .door-side{min-height:52vh}
+  .frame{height:84%;width:min(58%,300px);border-width:10px}
+  .panel{justify-content:flex-start}
+  .walls,.rules,.sim-grid{grid-template-columns:1fr}
+  .limits{columns:1}
+  .wall{min-height:0}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="door-side" id="doorSide">
+    <div class="door-word">SABIR<small>the impatient pay the patient</small></div>
+    <div class="mode" id="mode">Practice mode, no real money</div>
+    <div class="frame"><div class="light"></div><div class="leaf" id="leaf"><div class="knob"></div></div></div>
+    <canvas id="sand"></canvas>
+  </div>
+
+  <div class="panel">
+    <h1 id="title">Can you wait five minutes?</h1>
+    <p class="lead" id="lead">There is a door. It opens for free if you wait. Or pay to walk through right now, and your money goes to the people who waited.</p>
+    <div id="tollBox" hidden>
+      <div class="toll"><b class="num" id="toll">5.00</b><span>NEAR to skip the rest</span></div>
+      <div class="bar"><i id="waitBar"></i></div>
+      <p class="hint num" id="clock"></p>
+    </div>
+    <div class="stats" id="meStats" hidden>
+      <div><b id="sBal" class="num">0</b><span>your SABIR</span></div>
+      <div><b id="sRank">Restless</b><span>your rank</span></div>
+      <div><b id="sTax" class="num">50%</b><span>exit tax now</span></div>
+      <div><b id="sVal" class="num">0</b><span>NEAR if you leave</span></div>
+      <div><b id="sHeld" class="num">0</b><span>days held</span></div>
+      <div><b id="sCost" class="num">0</b><span>NEAR you paid</span></div>
+    </div>
+    <div class="actions" id="actions"></div>
+    <p class="hint" id="hint"></p>
+  </div>
+</div>
+
+<section>
+  <h2>The door keeps a record</h2>
+  <p class="sub">Every entry is written down. Paying is allowed, and everyone gets to see how long you lasted.</p>
+  <div class="walls">
+    <div><h3>Wall of Impatience</h3><ul class="wall" id="wallSkip"></ul></div>
+    <div><h3>Wall of Patience</h3><ul class="wall" id="wallWait"></ul></div>
+  </div>
+</section>
+
+<section>
+  <h2>Three rules, all in the contract</h2>
+  <p class="sub">No owner, no admin method, no off-chain server deciding anything. The numbers are fixed at launch and anyone can read them.</p>
+  <div class="rules">
+    <div><div class="n">1</div><h3>The Gate</h3><p>Everyone pays a small fee and starts a five-minute wait. Walking through early costs a toll that starts at 5 NEAR and melts to zero. Earlier entrants get a larger grant, so waiting has a price too.</p></div>
+    <div><div class="n">2</div><h3>The Vault</h3><p>Every fee and toll goes into a vault that backs the supply. You can always burn SABIR for your share of it. There is no pool to drain and nobody who can move the money.</p></div>
+    <div><div class="n">3</div><h3>The Exit</h3><p>Leaving or sending costs up to 50% tax, shrinking to 5% after 30 days of holding. Taxed value stays behind, so every early exit raises the backing of those who stayed.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>What happens over 60 days</h2>
+  <p class="sub">The contract's formulas run in a simulation before launch, as the parameters are final once deployed. The line is the NEAR backing 100,000 SABIR.</p>
+  <div class="sim-grid">
+    <div><div class="tabs" id="tabs"></div><svg id="chart" viewBox="0 0 720 340" role="img" aria-label="Backing per 100,000 SABIR over 60 days"></svg></div>
+    <table class="facts" id="facts"></table>
+  </div>
+</section>
+
+<section>
+  <h2>What this does not solve</h2>
+  <p class="sub">Written plainly, because the mechanic should be judged on what it really does.</p>
+  <ul class="limits">
+    <li>Sybil: one person can open many accounts. Each pays the fee and the anti-profit rule stops instant gains, so farming loses money in the simulation. It can still fill the gate, which is griefing, and the limit is its cost.</li>
+    <li>Patience is measured in holding time, not character. A wallet that forgets its keys for 30 days looks like a saint.</li>
+    <li>Late entrants receive smaller grants and can lose money if nobody comes after them. The gains of those who stay come from those who leave and those who pay. This is a game with winners and losers, not a yield product.</li>
+    <li>No DEX pool in v1. A pool would pay the tax on every trade, so the vault is the only exit.</li>
+    <li>This deployment runs on NEAR testnet with no real value.</li>
+    <li>The clock uses block time, and a transfer blends the receiver's clock by weight. Small top-ups barely hurt a patient holder, by design.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Live log</h2>
+  <p class="sub" id="logNote">In practice mode the other entrants are simulated.</p>
+  <ul class="log" id="log"></ul>
+</section>
+
+<footer>SABIR on NEAR. Built at NEAR HACKATHON. Open source under MIT.</footer>
+
+<script src="sim-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+contract/target/
+.tools/
+node_modules/
+.env*
+*.pem
+*.key
+near-credentials/
