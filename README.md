@@ -4,6 +4,15 @@ A NEAR memecoin with one mechanic: **the impatient pay the patient.**
 
 Track: Memecoins With Mechanics. Built at NEAR HACKATHON.
 
+## The name
+
+*Sabır* (said "sah-bur") is Turkish for **patience**. The ticker drops the dotless ı and becomes SABIR.
+
+Two Turkish sayings are the whole design:
+
+- *Sabrın sonu selamettir*: "the end of patience is safety". Here the end of patience is a 5% exit tax and a share of the vault.
+- *Sabreden derviş muradına ermiş*: "the dervish who waited got his wish". Here the one who waits five minutes walks through the door for free.
+
 ## The problem
 
 Most memecoins reward whoever gets in first and sells first. Holding is a promise, and nothing in the token enforces it. SABIR puts patience in the contract: waiting is free, hurrying costs money, and that money goes to the people who stayed.

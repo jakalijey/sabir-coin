@@ -88,6 +88,14 @@ section>h2{font-size:clamp(28px,3.4vw,44px);margin-bottom:8px}
 .limits li{margin-bottom:10px;break-inside:avoid}
 .log{font-size:14px;list-style:none;padding:0;margin:0;max-height:300px;overflow:auto}
 .log li{padding:6px 0;border-bottom:1px solid var(--line);color:var(--dim)}
+.name{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:clamp(24px,5vw,72px);align-items:center}
+.name .word{font:400 clamp(72px,12vw,168px)/1 Georgia,serif;color:var(--amber);letter-spacing:-.02em}
+.name .say{color:var(--dim);font-size:18px;margin-top:10px}
+.name .say b{color:inherit;font-weight:600}
+.saying{border-left:3px solid var(--amber);padding:4px 0 4px 20px;margin:0 0 26px}
+.saying q{display:block;font:italic 400 clamp(22px,2.4vw,30px)/1.25 Georgia,serif;quotes:none}
+.saying span{display:block;color:var(--dim);margin-top:6px}
+@media (max-width:760px){.name{grid-template-columns:1fr}}
 footer{padding:28px clamp(20px,5vw,72px);border-top:1px solid var(--line);font-size:14px;color:var(--dim)}
 
 @media (max-width:860px){
@@ -105,7 +113,7 @@ footer{padding:28px clamp(20px,5vw,72px);border-top:1px solid var(--line);font-s
 <body>
 <div class="stage">
   <div class="door-side" id="doorSide">
-    <div class="door-word">SABIR<small>the impatient pay the patient</small></div>
+    <div class="door-word">SABIR<small>Turkish for patience. The impatient pay the patient.</small></div>
     <div class="mode" id="mode">Practice mode, no real money</div>
     <div class="frame"><div class="light"></div><div class="leaf" id="leaf"><div class="knob"></div></div></div>
     <canvas id="sand"></canvas>
@@ -131,6 +139,21 @@ footer{padding:28px clamp(20px,5vw,72px);border-top:1px solid var(--line);font-s
     <p class="hint" id="hint"></p>
   </div>
 </div>
+
+<section aria-labelledby="nameTitle">
+  <h2 id="nameTitle">Why the name</h2>
+  <div class="name">
+    <div>
+      <div class="word" lang="tr">Sabır</div>
+      <p class="say">Turkish for <b>patience</b>. Said <b>sah-bur</b>. The dotless <span lang="tr">ı</span> is a short, soft vowel, so the ticker is SABIR.</p>
+    </div>
+    <div>
+      <div class="saying"><q lang="tr">Sabrın sonu selamettir.</q><span>"The end of patience is safety." A Turkish saying. In SABIR, the end of patience is the low exit tax and your share of the vault.</span></div>
+      <div class="saying"><q lang="tr">Sabreden derviş muradına ermiş.</q><span>"The dervish who waited got his wish." In SABIR, the one who waits five minutes walks through the door for free.</span></div>
+      <p class="sub" style="margin:0">Every Turkish grandmother says these. SABIR puts them in a contract, where nobody can talk their way around them.</p>
+    </div>
+  </div>
+</section>
 
 <section>
   <h2>The door keeps a record</h2>
