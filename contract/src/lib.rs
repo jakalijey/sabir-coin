@@ -1,38 +1,55 @@
-//! SABIR: a memecoin that only rewards patience.
+//! SABIR: a memecoin that only patience can earn.
 //!
-//! The Gate: everyone enters by waiting, or pays a toll that melts as the wait runs out.
-//! The Vault: every fee and toll backs the supply in NEAR.
-//! The Exit: leaving or sending costs a tax that shrinks with holding time. Taxed tokens burn,
-//! so whoever stays owns a larger share of the vault.
+//! The Gate: a five minute walk reads the walker and draws their soul. It pays no coin.
+//! The Soul: an NFT that keeps its owner's deposit and earns SABIR for every day it lives.
+//! Nobody earns more for arriving first. See `souls`.
+//! The Vault: what the impatient leave behind. Tolls, exit taxes, a cut of soul sales and gifts.
+//! The Exit: burn SABIR for a share of the vault. Breaking a soul returns the deposit minus a tax
+//! that shrinks with age and never reaches zero, so whoever leaves first pays whoever leaves last.
 //!
-//! All parameters are set at launch. There is no owner and no admin method.
+//! All parameters are set at launch. There is no owner. The creator's only power over the contract
+//! is moving the address soul pictures are served from.
 use near_contract_standards::fungible_token::core::FungibleTokenCore;
 use near_contract_standards::fungible_token::events::{FtBurn, FtMint, FtTransfer};
 use near_contract_standards::fungible_token::metadata::{
     FungibleTokenMetadata, FungibleTokenMetadataProvider, FT_METADATA_SPEC,
 };
 use near_contract_standards::fungible_token::receiver::ext_ft_receiver;
-use near_contract_standards::fungible_token::resolver::FungibleTokenResolver;
+use near_contract_standards::non_fungible_token::{NonFungibleToken, TokenId};
 use near_contract_standards::storage_management::{
     StorageBalance, StorageBalanceBounds, StorageManagement,
 };
-use near_sdk::json_types::U128;
-use near_sdk::store::{LookupMap, Vector};
+use near_sdk::json_types::{Base64VecU8, U128};
+use near_sdk::store::{IterableMap, LookupMap, Vector};
 use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise,
     PromiseOrValue,
 };
+
+mod souls;
+use souls::{Listing, Soul, MAX_SKETCH};
 
 uint::construct_uint! {
     pub struct U256(4);
 }
 
 const BPS: u128 = 10_000;
+const DAY: u128 = 86_400;
 const LOG_CAPACITY: u32 = 64;
+/// Registering a holder who never went through the gate.
 const STORAGE_COST: u128 = 5_000_000_000_000_000_000_000; // 0.005 NEAR
-const GAS_ON_TRANSFER: Gas = Gas::from_tgas(35);
-const GAS_RESOLVE: Gas = Gas::from_tgas(5);
-const GAS_ON_LEAVE: Gas = Gas::from_tgas(3);
+/// Kept from every entry fee: the ticket, the holder record, the soul and its one possible listing.
+const ENTRY_STORAGE: u128 = 16_000_000_000_000_000_000_000; // 0.016 NEAR
+/// Smallest gift the vault takes, so that a wall of dust cannot push real entries off the log.
+const MIN_GIFT: u128 = 10_000_000_000_000_000_000_000; // 0.01 NEAR
+const MAX_MEDIA_BASE: usize = 200;
+/// What `ft_transfer_call` keeps for its own work and for the way back. The receiver gets the rest.
+const GAS_KEPT: Gas = Gas::from_tgas(40);
+/// The least gas a receiver of `ft_transfer_call` is given.
+const GAS_MIN_RECEIVER: Gas = Gas::from_tgas(10);
+const GAS_RESOLVE: Gas = Gas::from_tgas(10);
+const GAS_ON_PAYOUT: Gas = Gas::from_tgas(5);
+const ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231C1712'/%3E%3Cpath d='M20 14h24l-9 18 9 18H20l9-18z' fill='%23D4A24A'/%3E%3C/svg%3E";
 
 fn mul_div(a: u128, b: u128, c: u128) -> u128 {
     if c == 0 {
@@ -44,9 +61,16 @@ fn mul_div(a: u128, b: u128, c: u128) -> u128 {
 #[derive(BorshStorageKey)]
 #[near]
 enum Key {
+    /// Never used: the NFT library's per-owner sets start with this prefix byte.
+    #[allow(dead_code)]
+    Reserved,
     Holders,
     Tickets,
     Log,
+    SoulOwners,
+    SoulsPerOwner,
+    Souls,
+    Listings,
 }
 
 #[near(serializers = [json, borsh])]
@@ -56,19 +80,28 @@ pub struct Params {
     pub gate_secs: u64,
     /// Toll at the moment of entry. It falls linearly to zero over `gate_secs`.
     pub toll_start: U128,
-    /// Paid by everyone on entry. It goes to the vault, net of storage.
+    /// Paid on entry. All of it except the storage stays inside the walker's soul.
     pub entry_fee: U128,
-    /// Grant for the first entrant. It falls linearly to zero at `max_entrants`.
-    pub base_grant: U128,
-    pub max_entrants: u32,
-    /// Exit tax at zero patience, in basis points.
+    /// SABIR one living soul earns per day. The same for every soul.
+    pub daily_sabir: U128,
+    /// Seconds the bridge stays open after launch. When it closes nobody can enter and no soul earns.
+    pub bridge_secs: u64,
+    /// Tax at zero patience, in basis points.
     pub max_tax_bps: u16,
-    /// Exit tax at full patience, in basis points.
+    /// Tax at full patience, in basis points. Leaving never gets cheaper than this.
     pub min_tax_bps: u16,
-    /// Seconds of holding that bring the tax down to `min_tax_bps`.
+    /// Seconds of age that bring the tax down to `min_tax_bps`.
     pub full_patience_secs: u64,
     /// Locked in the contract forever so that supply never reaches zero.
     pub seed: U128,
+    /// Cut of every soul sale that goes to the vault, in basis points.
+    pub sale_vault_bps: u16,
+    /// Cut of every soul sale that goes to `creator`, in basis points.
+    pub sale_creator_bps: u16,
+    /// Receives `sale_creator_bps` of every sale. Its only other power is `set_media_base`.
+    pub creator: AccountId,
+    /// Soul pictures are served from `<media_base><token_id>.svg`.
+    pub media_base: String,
 }
 
 #[near(serializers = [borsh])]
@@ -84,7 +117,7 @@ pub struct Ticket {
     pub passed: bool,
     pub waited_secs: u64,
     pub paid: U128,
-    pub fee: U128,
+    pub deposit: U128,
 }
 
 #[near(serializers = [json, borsh])]
@@ -100,16 +133,54 @@ pub struct LogEntry {
 
 #[near(serializers = [json])]
 pub struct State {
+    /// What the impatient left behind. SABIR is the only claim on it.
     pub vault: U128,
+    /// NEAR of walkers who have not crossed yet. It is theirs, not the vault's.
+    pub waiting: U128,
+    /// NEAR inside living souls. It is their owners', not the vault's.
+    pub deposits: U128,
+    /// SABIR in wallets, including the locked seed.
     pub total_supply: U128,
+    /// SABIR earned by living souls and not collected yet.
+    pub uncollected: U128,
     pub burned: U128,
     pub entrants: u32,
     pub tolls_paid: U128,
+    pub taxes_paid: U128,
+    /// NEAR anyone added with `feed_vault`.
+    pub gifts: U128,
     pub skippers: u32,
     pub waiters: u32,
     pub exits: u32,
     pub now: u64,
-    pub current_grant: U128,
+    pub bridge_closes: u64,
+    pub souls_minted: u32,
+    pub souls_broken: u32,
+    pub souls_listed: u32,
+    pub sales: u32,
+    pub sale_volume: U128,
+}
+
+/// Who gave up, when and why. Written by the chain, readable by anyone.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Default)]
+pub struct ExitBook {
+    /// Souls born on each layer: Chaos, Middle, Threshold, Builder.
+    pub born_by_layer: [u32; 4],
+    /// Souls broken, by the layer they were born on.
+    pub broken_by_layer: [u32; 4],
+    /// Souls broken, by the reason given: unsaid, money, price, bored, better offer, no trust.
+    pub broken_by_reason: [u32; 6],
+    /// Souls broken, by fortieths of full patience lived: under 1, 7, 20, 40, and 40 or more.
+    /// With a 40-day patience these are days.
+    pub broken_by_days: [u32; 5],
+}
+
+#[near(serializers = [json])]
+pub struct Crossing {
+    pub token_id: TokenId,
+    /// NEAR now held inside the soul.
+    pub deposit: U128,
 }
 
 #[near(serializers = [json])]
@@ -128,18 +199,34 @@ pub struct HolderView {
 #[derive(PanicOnDefault)]
 pub struct Sabir {
     params: Params,
+    launched: u64,
     holders: LookupMap<AccountId, Holder>,
     tickets: LookupMap<AccountId, Ticket>,
     log: Vector<LogEntry>,
     log_total: u64,
     vault: u128,
+    waiting: u128,
+    deposits: u128,
     total_supply: u128,
     burned: u128,
+    /// Soul-seconds earned and not collected, as of `ticked_at`.
+    uncollected_secs: u128,
+    ticked_at: u64,
     entrants: u32,
     tolls_paid: u128,
+    taxes_paid: u128,
+    gifts: u128,
     skippers: u32,
     waiters: u32,
     exits: u32,
+    tokens: NonFungibleToken,
+    souls: LookupMap<TokenId, Soul>,
+    listings: IterableMap<TokenId, Listing>,
+    souls_minted: u32,
+    souls_broken: u32,
+    sales: u32,
+    sale_volume: u128,
+    book: ExitBook,
 }
 
 #[near]
@@ -148,57 +235,91 @@ impl Sabir {
     pub fn new(params: Params) -> Self {
         require!(params.gate_secs > 0, "gate_secs must be positive");
         require!(params.full_patience_secs > 0, "full_patience_secs must be positive");
-        require!(params.max_entrants > 0, "max_entrants must be positive");
+        require!(params.bridge_secs > params.gate_secs, "the bridge must outlast the gate");
+        require!(params.daily_sabir.0 > 0, "daily_sabir must be positive");
         require!((params.max_tax_bps as u128) < BPS, "max_tax_bps must be below 100%");
         require!(params.min_tax_bps <= params.max_tax_bps, "min tax above max tax");
-        require!(params.entry_fee.0 > STORAGE_COST, "entry_fee must cover storage");
+        require!(params.entry_fee.0 > ENTRY_STORAGE, "entry_fee must cover storage");
         require!(params.seed.0 > 0, "seed must be positive");
+        require!(
+            params.sale_vault_bps as u128 + params.sale_creator_bps as u128 <= BPS / 4,
+            "sale cut is too large"
+        );
+        require!(params.creator != env::current_account_id(), "creator must be a separate account");
+        require!(!params.media_base.is_empty(), "media_base is required");
+        require!(params.media_base.len() <= MAX_MEDIA_BASE, "media_base is too long");
         let me = env::current_account_id();
         let seed = params.seed.0;
+        let now = Self::now();
         let mut this = Self {
             params,
+            launched: now,
             holders: LookupMap::new(Key::Holders),
             tickets: LookupMap::new(Key::Tickets),
             log: Vector::new(Key::Log),
             log_total: 0,
             vault: 0,
+            waiting: 0,
+            deposits: 0,
             total_supply: seed,
             burned: 0,
+            uncollected_secs: 0,
+            ticked_at: now,
             entrants: 0,
             tolls_paid: 0,
+            taxes_paid: 0,
+            gifts: 0,
             skippers: 0,
             waiters: 0,
             exits: 0,
+            tokens: NonFungibleToken::new(
+                Key::SoulOwners,
+                me.clone(),
+                None::<Key>,
+                Some(Key::SoulsPerOwner),
+                None::<Key>,
+            ),
+            souls: LookupMap::new(Key::Souls),
+            listings: IterableMap::new(Key::Listings),
+            souls_minted: 0,
+            souls_broken: 0,
+            sales: 0,
+            sale_volume: 0,
+            book: ExitBook::default(),
         };
-        this.holders.insert(me.clone(), Holder { balance: seed, clock: Self::now() });
+        this.holders.insert(me.clone(), Holder { balance: seed, clock: now });
         FtMint { owner_id: &me, amount: U128(seed), memo: Some("seed") }.emit();
         this
     }
 
     // ---------- The Gate ----------
 
-    /// Step through the door and start the wait.
+    /// Step onto the bridge and start the wait. The fee stays the walker's.
     #[payable]
     pub fn enter_gate(&mut self) {
         let who = env::predecessor_account_id();
         require!(self.tickets.get(&who).is_none(), "already entered");
-        require!(self.entrants < self.params.max_entrants, "the gate is closed");
+        require!(Self::now() < self.bridge_closes(), "the bridge is closed");
         let fee = self.params.entry_fee.0;
-        let deposit = env::attached_deposit().as_yoctonear();
-        require!(deposit >= fee, "attach the entry fee");
-        let net = fee - STORAGE_COST;
-        self.vault += net;
+        let attached = env::attached_deposit().as_yoctonear();
+        require!(attached >= fee, "attach the entry fee");
+        let deposit = fee - ENTRY_STORAGE;
+        self.waiting += deposit;
+        self.entrants += 1;
         self.tickets.insert(
             who.clone(),
-            Ticket { entered: Self::now(), passed: false, waited_secs: 0, paid: U128(0), fee: U128(net) },
+            Ticket { entered: Self::now(), passed: false, waited_secs: 0, paid: U128(0), deposit: U128(deposit) },
         );
         self.push_log("enter", &who, 0, fee, 0);
-        Self::refund(&who, deposit - fee);
+        Self::refund(&who, attached - fee);
     }
 
     /// Walk through. Free once the wait is over; before that, attach the current toll.
+    /// The walk is rewarded with a soul and nothing else: from here on, only time earns.
+    /// `sketch` is how the walk went, as drawn by the game. It only shapes the picture of the
+    /// soul: its seed, its age, the deposit inside and every payment come from the chain.
     #[payable]
-    pub fn pass_gate(&mut self) -> U128 {
+    pub fn pass_gate(&mut self, sketch: Option<Base64VecU8>) -> Crossing {
         let who = env::predecessor_account_id();
         let mut ticket = self
             .tickets
@@ -206,59 +327,72 @@ impl Sabir {
             .cloned()
             .unwrap_or_else(|| env::panic_str("enter the gate first"));
         require!(!ticket.passed, "already through the gate");
-        require!(self.entrants < self.params.max_entrants, "the gate is closed");
+        let sketch = sketch.map(|s| s.0).unwrap_or_default();
+        require!(sketch.len() <= MAX_SKETCH, "the sketch is too long");
         let now = Self::now();
         let waited = now.saturating_sub(ticket.entered);
         let toll = self.toll_after(waited);
-        let deposit = env::attached_deposit().as_yoctonear();
-        require!(deposit >= toll, "attach the toll or keep waiting");
+        let attached = env::attached_deposit().as_yoctonear();
+        require!(attached >= toll, "attach the toll or keep waiting");
 
+        self.tick();
+        let deposit = ticket.deposit.0;
         self.vault += toll;
         self.tolls_paid += toll;
-        let grant = self.grant_for(ticket.fee.0 + toll, waited);
-        require!(grant > 0, "nothing left to grant");
+        self.waiting -= deposit;
+        self.deposits += deposit;
 
         ticket.passed = true;
         ticket.waited_secs = waited;
         ticket.paid = U128(toll);
         self.tickets.insert(who.clone(), ticket.clone());
 
-        let (old_balance, old_clock) = self
-            .holders
-            .get(&who)
-            .map(|h| (h.balance, h.clock))
-            .unwrap_or((0, ticket.entered));
-        self.holders.insert(
-            who.clone(),
-            Holder {
-                balance: old_balance + grant,
-                clock: Self::blend_clock(old_balance, old_clock, grant, ticket.entered),
-            },
-        );
-        self.total_supply += grant;
-        self.entrants += 1;
-
+        if !self.holders.contains_key(&who) {
+            self.holders.insert(who.clone(), Holder { balance: 0, clock: ticket.entered });
+        }
         if toll > 0 {
             self.skippers += 1;
-            self.push_log("skip", &who, grant, toll, waited);
+            self.push_log("skip", &who, 0, toll, waited);
         } else {
             self.waiters += 1;
-            self.push_log("wait", &who, grant, 0, waited);
+            self.push_log("wait", &who, 0, 0, waited);
         }
-        FtMint {
-            owner_id: &who,
-            amount: U128(grant),
-            memo: Some(if toll > 0 { "paid the toll" } else { "waited" }),
-        }
-        .emit();
-        Self::refund(&who, deposit - toll);
-        U128(grant)
+        let token_id = self.mint_soul(&who, ticket.entered, waited, toll, deposit, sketch);
+        Self::refund(&who, attached - toll);
+        Crossing { token_id, deposit: U128(deposit) }
+    }
+
+    // ---------- The Vault ----------
+
+    /// Anyone can add to the vault. It comes back out only through SABIR, to those who waited.
+    #[payable]
+    pub fn feed_vault(&mut self) {
+        let who = env::predecessor_account_id();
+        let amount = env::attached_deposit().as_yoctonear();
+        require!(amount >= MIN_GIFT, "the smallest gift is 0.01 NEAR");
+        self.vault += amount;
+        self.gifts += amount;
+        self.push_log("feed", &who, 0, amount, 0);
+    }
+
+    /// The only thing the creator can change: where soul pictures are served from, so that they
+    /// do not die with a domain name. It touches no money and no rule.
+    #[payable]
+    pub fn set_media_base(&mut self, media_base: String) {
+        near_sdk::assert_one_yocto();
+        require!(env::predecessor_account_id() == self.params.creator, "only the creator can move the pictures");
+        require!(!media_base.is_empty(), "media_base is required");
+        require!(media_base.len() <= MAX_MEDIA_BASE, "media_base is too long");
+        self.params.media_base = media_base;
     }
 
     // ---------- The Exit ----------
 
     /// Burn tokens for their share of the vault, minus the tax. The tax stays in the vault.
+    /// It cannot be undone, so it takes a key that can attach money and the wallet's confirmation.
+    #[payable]
     pub fn leave(&mut self, amount: U128) -> Promise {
+        near_sdk::assert_one_yocto();
         let who = env::predecessor_account_id();
         require!(who != env::current_account_id(), "the seed never leaves");
         let amount = amount.0;
@@ -278,12 +412,12 @@ impl Sabir {
         FtBurn { owner_id: &who, amount: U128(amount), memo: Some("left through the vault") }.emit();
         Promise::new(who)
             .transfer(NearToken::from_yoctonear(payout))
-            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_ON_LEAVE).on_leave(U128(payout)))
+            .then(Self::ext(env::current_account_id()).with_static_gas(GAS_ON_PAYOUT).on_payout(U128(payout)))
     }
 
     /// A failed payout goes back to the vault.
     #[private]
-    pub fn on_leave(&mut self, payout: U128) {
+    pub fn on_payout(&mut self, payout: U128) {
         if env::promise_result_checked(0, 0).is_err() {
             self.vault += payout.0;
         }
@@ -298,16 +432,31 @@ impl Sabir {
     pub fn get_state(&self) -> State {
         State {
             vault: U128(self.vault),
+            waiting: U128(self.waiting),
+            deposits: U128(self.deposits),
             total_supply: U128(self.total_supply),
+            uncollected: U128(self.tokens_of(self.live_uncollected_secs())),
             burned: U128(self.burned),
             entrants: self.entrants,
             tolls_paid: U128(self.tolls_paid),
+            taxes_paid: U128(self.taxes_paid),
+            gifts: U128(self.gifts),
             skippers: self.skippers,
             waiters: self.waiters,
             exits: self.exits,
             now: Self::now(),
-            current_grant: U128(self.curve_grant()),
+            bridge_closes: self.bridge_closes(),
+            souls_minted: self.souls_minted,
+            souls_broken: self.souls_broken,
+            souls_listed: self.listings.len(),
+            sales: self.sales,
+            sale_volume: U128(self.sale_volume),
         }
+    }
+
+    /// The public record of who gave up, when and why.
+    pub fn get_exit_book(&self) -> ExitBook {
+        self.book.clone()
     }
 
     pub fn get_holder(&self, account_id: AccountId) -> HolderView {
@@ -353,6 +502,40 @@ impl Sabir {
         env::block_timestamp_ms() / 1000
     }
 
+    fn bridge_closes(&self) -> u64 {
+        self.launched + self.params.bridge_secs
+    }
+
+    /// The last moment that counts towards earning.
+    fn earning_now(&self) -> u64 {
+        Self::now().min(self.bridge_closes())
+    }
+
+    fn alive(&self) -> u128 {
+        (self.souls_minted - self.souls_broken) as u128
+    }
+
+    fn live_uncollected_secs(&self) -> u128 {
+        self.uncollected_secs + self.alive() * self.earning_now().saturating_sub(self.ticked_at) as u128
+    }
+
+    /// Brings the running total up to now. Must come before anything that changes the number of
+    /// living souls or what they have collected.
+    fn tick(&mut self) {
+        self.uncollected_secs = self.live_uncollected_secs();
+        self.ticked_at = self.ticked_at.max(self.earning_now());
+    }
+
+    fn tokens_of(&self, secs: u128) -> u128 {
+        mul_div(secs, self.params.daily_sabir.0, DAY)
+    }
+
+    /// Every SABIR that exists or has been earned counts, collected or not. Collecting early
+    /// can never take a larger share than waiting to collect.
+    fn live_supply(&self) -> u128 {
+        self.total_supply + self.tokens_of(self.live_uncollected_secs())
+    }
+
     fn refund(who: &AccountId, amount: u128) {
         if amount > 0 {
             let _ = Promise::new(who.clone()).transfer(NearToken::from_yoctonear(amount));
@@ -392,31 +575,8 @@ impl Sabir {
     }
 
     fn exit_value(&self, amount: u128, tax_bps: u16) -> u128 {
-        let gross = mul_div(amount, self.vault, self.total_supply);
+        let gross = mul_div(amount, self.vault, self.live_supply());
         gross - mul_div(gross, tax_bps as u128, BPS)
-    }
-
-    fn curve_grant(&self) -> u128 {
-        let cap = self.params.max_entrants as u128;
-        mul_div(self.params.base_grant.0, cap - self.entrants as u128, cap)
-    }
-
-    /// The curve grant, cut so that entering and leaving at once can never profit from the vault.
-    /// `self.vault` already includes the entrant's `cost`.
-    fn grant_for(&self, cost: u128, waited: u64) -> u128 {
-        let curve = self.curve_grant();
-        let keep = BPS - self.tax_after(waited) as u128;
-        let v = U256::from(self.vault) * U256::from(keep);
-        let c = U256::from(cost) * U256::from(BPS);
-        if v <= c {
-            return curve;
-        }
-        let limit = c * U256::from(self.total_supply) / (v - c);
-        if limit < U256::from(curve) {
-            limit.as_u128()
-        } else {
-            curve
-        }
     }
 
     fn blend_clock(old_balance: u128, old_clock: u64, added: u128, added_clock: u64) -> u64 {
@@ -446,8 +606,10 @@ impl Sabir {
         self.log_total += 1;
     }
 
-    /// Moves tokens from sender to receiver and burns the tax. Returns the net amount delivered.
-    fn taxed_transfer(&mut self, sender: &AccountId, receiver: &AccountId, amount: u128, memo: Option<&str>) -> u128 {
+    /// Takes `amount` from the sender and credits what is left after the tax. Returns what was
+    /// credited, the tax and its rate. The tax is not burned here and the receiver's clock does
+    /// not move here: `ft_transfer` does both at once, `ft_transfer_call` waits for the answer.
+    fn move_coins(&mut self, sender: &AccountId, receiver: &AccountId, amount: u128, memo: Option<&str>) -> (u128, u128, u16) {
         require!(amount > 0, "amount must be positive");
         require!(sender != receiver, "sending to yourself does not make you patient");
         require!(*sender != env::current_account_id(), "the seed never leaves");
@@ -461,25 +623,29 @@ impl Sabir {
         require!(from.balance >= amount, "not enough balance");
         from.balance -= amount;
 
-        let now = Self::now();
         let to = self.holders.get_mut(receiver).unwrap_or_else(|| env::panic_str("receiver is not registered"));
-        to.clock = Self::blend_clock(to.balance, to.clock, net, now);
         to.balance += net;
 
-        self.total_supply -= tax;
-        self.burned += tax;
-        FtTransfer {
-            old_owner_id: sender,
-            new_owner_id: receiver,
-            amount: U128(net),
-            memo,
+        FtTransfer { old_owner_id: sender, new_owner_id: receiver, amount: U128(net), memo }.emit();
+        (net, tax, tax_bps)
+    }
+
+    /// Coins that just arrived pull their owner's clock towards now, by their weight.
+    fn age_in(&mut self, who: &AccountId, arrived: u128) {
+        let now = Self::now();
+        if let Some(holder) = self.holders.get_mut(who) {
+            let arrived = arrived.min(holder.balance);
+            holder.clock = Self::blend_clock(holder.balance - arrived, holder.clock, arrived, now);
         }
-        .emit();
+    }
+
+    fn burn_tax(&mut self, sender: &AccountId, tax: u128, tax_bps: u16) {
         if tax > 0 {
+            self.total_supply -= tax;
+            self.burned += tax;
             FtBurn { owner_id: sender, amount: U128(tax), memo: Some("exit tax") }.emit();
             self.push_log("tax", sender, tax, 0, tax_bps as u64);
         }
-        net
     }
 }
 
@@ -489,7 +655,9 @@ impl FungibleTokenCore for Sabir {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>) {
         require!(env::attached_deposit() == NearToken::from_yoctonear(1), "attach exactly 1 yoctoNEAR");
         let sender = env::predecessor_account_id();
-        self.taxed_transfer(&sender, &receiver_id, amount.0, memo.as_deref());
+        let (net, tax, tax_bps) = self.move_coins(&sender, &receiver_id, amount.0, memo.as_deref());
+        self.age_in(&receiver_id, net);
+        self.burn_tax(&sender, tax, tax_bps);
     }
 
     #[payable]
@@ -501,19 +669,18 @@ impl FungibleTokenCore for Sabir {
         msg: String,
     ) -> PromiseOrValue<U128> {
         require!(env::attached_deposit() == NearToken::from_yoctonear(1), "attach exactly 1 yoctoNEAR");
-        require!(
-            env::prepaid_gas().as_gas() > GAS_ON_TRANSFER.as_gas() + GAS_RESOLVE.as_gas() + Gas::from_tgas(10).as_gas(),
-            "more gas is required"
-        );
+        let prepaid = env::prepaid_gas().as_gas();
+        require!(prepaid > GAS_KEPT.as_gas() + GAS_MIN_RECEIVER.as_gas(), "more gas is required");
         let sender = env::predecessor_account_id();
-        let net = self.taxed_transfer(&sender, &receiver_id, amount.0, memo.as_deref());
+        let (net, tax, _) = self.move_coins(&sender, &receiver_id, amount.0, memo.as_deref());
         ext_ft_receiver::ext(receiver_id.clone())
-            .with_static_gas(GAS_ON_TRANSFER)
+            .with_static_gas(Gas::from_gas(prepaid - GAS_KEPT.as_gas()))
             .ft_on_transfer(sender.clone(), U128(net), msg)
             .then(Self::ext(env::current_account_id()).with_static_gas(GAS_RESOLVE).ft_resolve_transfer(
                 sender,
                 receiver_id,
                 U128(net),
+                U128(tax),
             ))
             .into()
     }
@@ -528,19 +695,17 @@ impl FungibleTokenCore for Sabir {
 }
 
 #[near]
-impl FungibleTokenResolver for Sabir {
+impl Sabir {
+    /// How a `ft_transfer_call` ends. What the receiver did not use goes back to the sender with
+    /// its part of the tax. The tax is burned, and the receiver's clock moves, only for what was
+    /// really delivered: a transfer that did not happen costs nothing.
     #[private]
-    fn ft_resolve_transfer(&mut self, sender_id: AccountId, receiver_id: AccountId, amount: U128) -> U128 {
-        let amount = amount.0;
+    pub fn ft_resolve_transfer(&mut self, sender_id: AccountId, receiver_id: AccountId, amount: U128, tax: U128) -> U128 {
+        let (net, tax) = (amount.0, tax.0);
         let unused = match env::promise_result_checked(0, 64) {
-            Ok(value) => near_sdk::serde_json::from_slice::<U128>(&value)
-                .map(|v| v.0.min(amount))
-                .unwrap_or(amount),
-            Err(_) => amount,
+            Ok(value) => near_sdk::serde_json::from_slice::<U128>(&value).map(|v| v.0.min(net)).unwrap_or(net),
+            Err(_) => net,
         };
-        if unused == 0 {
-            return U128(amount);
-        }
         let back = match self.holders.get_mut(&receiver_id) {
             Some(to) => {
                 let back = unused.min(to.balance);
@@ -549,26 +714,34 @@ impl FungibleTokenResolver for Sabir {
             }
             None => 0,
         };
-        if back > 0 {
+        let delivered = net - back;
+        let tax_burned = mul_div(tax, delivered, net);
+        let tax_back = tax - tax_burned;
+        let returned = back + tax_back;
+        self.age_in(&receiver_id, delivered);
+        if returned > 0 {
             match self.holders.get_mut(&sender_id) {
                 Some(from) => {
-                    from.balance += back;
-                    FtTransfer {
-                        old_owner_id: &receiver_id,
-                        new_owner_id: &sender_id,
-                        amount: U128(back),
-                        memo: Some("refund"),
+                    from.balance += returned;
+                    if back > 0 {
+                        FtTransfer {
+                            old_owner_id: &receiver_id,
+                            new_owner_id: &sender_id,
+                            amount: U128(back),
+                            memo: Some("refund"),
+                        }
+                        .emit();
                     }
-                    .emit();
                 }
                 None => {
-                    self.total_supply -= back;
-                    self.burned += back;
-                    FtBurn { owner_id: &receiver_id, amount: U128(back), memo: Some("sender is gone") }.emit();
+                    self.total_supply -= returned;
+                    self.burned += returned;
+                    FtBurn { owner_id: &receiver_id, amount: U128(returned), memo: Some("sender is gone") }.emit();
                 }
             }
         }
-        U128(amount - back)
+        self.burn_tax(&sender_id, tax_burned, mul_div(tax, BPS, net + tax) as u16);
+        U128(delivered)
     }
 }
 
@@ -579,7 +752,7 @@ impl FungibleTokenMetadataProvider for Sabir {
             spec: FT_METADATA_SPEC.to_string(),
             name: "Sabir".to_string(),
             symbol: "SABIR".to_string(),
-            icon: None,
+            icon: Some(ICON.to_string()),
             reference: None,
             reference_hash: None,
             decimals: 18,
@@ -635,3 +808,7 @@ impl StorageManagement for Sabir {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_coin;
+#[cfg(test)]
+mod tests_souls;

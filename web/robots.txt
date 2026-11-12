@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://sabir.heylogram.com/sitemap.xml

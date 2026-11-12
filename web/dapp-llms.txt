@@ -1,0 +1,17 @@
+# SABIR
+
+> A memecoin on NEAR that you cannot buy, only wait for. Sabir is Turkish for patience.
+
+SABIR is a game and a token on NEAR testnet. You walk a five-minute bridge in the browser. The walk reads how you behave and draws your soul as an NFT. Your 1 NEAR entry stays inside the soul as your own deposit. From then on every living soul earns 1 SABIR a day.
+
+- Leaving early costs an exit tax that falls from 50% to 5% over forty days. The tax stays in a shared vault, so those who leave early pay those who stay.
+- Souls change hands only through the contract's own market. Every sale pays 2% to the vault and 1% to the creator. A sold soul loses half its age.
+- Any soul can be broken for its deposit. Every broken soul is written to a public exit book on chain.
+- The contract has no admin functions. The creator can only change the address the pictures are served from.
+
+## Links
+
+- App (wallet and the walk): https://dapp.sabir.heylogram.com/
+- Front page: https://sabir.heylogram.com/
+- Fast copy where one day is one minute: https://dapp.sabir.heylogram.com/?fast=1
+- Contracts (NEAR testnet): sabir-bridge.testnet, sabir-bridge-fast.testnet
